@@ -22,7 +22,14 @@ type TransportTCP struct {
 
 	pool *connectionPool
 
+	// DialerCreate creates a net.Dialer for establishing TCP connections.
+	// If nil, a default dialer with 1-minute timeout is used.
 	DialerCreate func(laddr net.Addr) net.Dialer
+
+	// DialContext provides full control over connection establishment.
+	// If set, it takes precedence over DialerCreate.
+	// Use this for userspace network stacks (gVisor), IPsec tunnels, or custom transports.
+	DialContext func(ctx context.Context, laddr net.Addr, raddr net.Addr) (net.Conn, error)
 
 	onConnClose func(conn Connection)
 }
@@ -100,9 +107,18 @@ func (t *TransportTCP) CreateConnection(ctx context.Context, laddr Addr, raddr A
 		addr := traddr.String()
 		t.log.Debug("Dialing new connection", "raddr", addr)
 
-		d := t.DialerCreate(tladdr)
+		var conn net.Conn
+		var err error
 
-		conn, err := d.DialContext(ctx, "tcp", addr)
+		// If DialContext is set, use it directly (for userspace netstack, IPsec tunnels)
+		if t.DialContext != nil {
+			conn, err = t.DialContext(ctx, tladdr, traddr)
+		} else {
+			// Otherwise use DialerCreate (standard OS network stack)
+			d := t.DialerCreate(tladdr)
+			conn, err = d.DialContext(ctx, "tcp", addr)
+		}
+
 		if err != nil {
 			return nil, fmt.Errorf("%s dial err=%w", t, err)
 		}
